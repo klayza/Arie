@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import logger
 from ai import AI
-from pycode import clean_code
+from codecheck import clean_code
 
 load_dotenv()
 cheap_mode = os.getenv("CHEAP_MODE", "false").lower() == "true"
