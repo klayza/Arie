@@ -1,10 +1,57 @@
-{
-    "2025-05-29T20:33:54.823949": false,
-    "2025-05-29T20:58:29.045200": false,
-    "2025-05-30T00:34:17.792933": true,
-    "2025-05-30T00:33:32.278816": true,
-    "2025-05-30T00:56:01.061151": true,
-    "2025-05-30T00:44:49.520980": true,
-    "2025-05-30T00:40:38.989874": false,
-    "2025-05-30T18:10:14.483461": true
-}
+[
+    {
+        "working": false,
+        "timestamp": "2025-05-30T18:39:51.378031",
+        "query": "list the total sqft for all the rooms currently selected and calc the total"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T18:38:33.478478",
+        "query": "select all rooms in the current view"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T18:34:36.632238",
+        "query": "remove all dimension tags in this view"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T18:10:14.483461",
+        "query": "remove all dimension tags in the current view under 1 foot"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T00:56:01.061151",
+        "query": "what is the sq ft of the selected rooms?"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T00:44:49.520980",
+        "query": "what is currently selected?"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T00:34:17.792933",
+        "query": "how many walls are in this view?"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T00:33:32.278816",
+        "query": "create an alert that says hello revitt"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T21:16:36.809701",
+        "query": "remove all dimension tags in this view"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T21:34:03.185010",
+        "query": "select all rooms in the current view"
+    },
+    {
+        "working": true,
+        "timestamp": "2025-05-30T22:01:17.850572",
+        "query": "select all rooms in the current view"
+    }
+]

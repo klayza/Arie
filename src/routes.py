@@ -59,7 +59,6 @@ def generate_code(input=None):
                 "query": user_input,
                 "code": checked_code,
                 "model": ai_instance.model,
-                "timestamp": timestamp,
             },
         )
 
@@ -75,7 +74,6 @@ def generate_code(input=None):
                 "query": user_input,
                 "error": full_error,
                 "model": ai_instance.model,
-                "timestamp": timestamp,
             },
         )
         return jsonify({"error": full_error}), 500
@@ -83,14 +81,23 @@ def generate_code(input=None):
 
 @routes.route("/", methods=["GET"])
 def home():
-    # Retrieve all AI events (logged with type "ai")
+    # Load all ai events
     ai_logs = logger.get_logs("ai")
+
+    # Load the working data as a list then convert to a dict keyed by timestamp
     working_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "data", "working.json"
     )
     if os.path.exists(working_path):
-        with open(working_path, "r") as f:
-            working_data = json.load(f)
+        try:
+            with open(working_path, "r") as f:
+                working_list = json.load(f)
+            # Create dict mapping timestamp to working value
+            working_data = {
+                entry["timestamp"]: entry["working"] for entry in working_list
+            }
+        except json.JSONDecodeError:
+            working_data = {}
     else:
         working_data = {}
 
@@ -114,8 +121,10 @@ def home():
             <h3>Event at {{ event.timestamp }}</h3>
             <pre><code>{{ event.data.code }}</code></pre>
             <label>
-              <input type="checkbox" class="working-checkbox" data-timestamp="{{ event.timestamp }}"
-              {% if working_data.get(event.timestamp) %} checked {% endif %}>
+              <input type="checkbox" class="working-checkbox" 
+                     data-timestamp="{{ event.timestamp }}" 
+                     data-query="{{ event.data.query }}"
+                     {% if working_data.get(event.timestamp) %} checked {% endif %}>
               Working
             </label>
           </div>
@@ -125,13 +134,14 @@ def home():
           document.querySelectorAll('.working-checkbox').forEach(function(checkbox) {
             checkbox.addEventListener('change', function() {
               const timestamp = this.getAttribute('data-timestamp');
+              const query = this.getAttribute('data-query');
               const working = this.checked;
               fetch('/update_working', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({timestamp: timestamp, working: working})
+                body: JSON.stringify({timestamp: timestamp, query: query, working: working})
               })
               .then(response => response.json())
               .then(data => console.log(data));
@@ -148,6 +158,7 @@ def home():
 def update_working():
     data = request.get_json()
     timestamp = data.get("timestamp")
+    query = data.get("query")
     working = data.get("working")
     working_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "data", "working.json"
@@ -155,16 +166,34 @@ def update_working():
 
     if os.path.exists(working_path):
         with open(working_path, "r") as f:
-            working_data = json.load(f)
+            try:
+                working_data = json.load(f)
+                if not isinstance(working_data, list):
+                    working_data = []
+            except json.JSONDecodeError:
+                working_data = []
     else:
-        working_data = {}
+        working_data = []
 
-    working_data[timestamp] = working
+    # Check if a record with the same timestamp already exists. Update if found.
+    updated = False
+    for record in working_data:
+        if record.get("timestamp") == timestamp:
+            record["working"] = working
+            record["query"] = query
+            updated = True
+            break
+
+    if not updated:
+        working_data.append(
+            {"working": working, "timestamp": timestamp, "query": query}
+        )
+
     os.makedirs(os.path.dirname(working_path), exist_ok=True)
     with open(working_path, "w") as f:
         json.dump(working_data, f, indent=4)
 
-    return jsonify({"status": "success", "timestamp": timestamp, "working": working})
+    return jsonify(working_data), 200
 
 
 if __name__ == "__main__":

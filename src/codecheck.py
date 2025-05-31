@@ -72,25 +72,3 @@ def check_syntax(code_str):
         return True
     except SyntaxError as e:
         return str(e)
-
-
-if __name__ == "__main__":
-    valid_code = """
-import sys
-def greet(name):
-    print "Hello, " + name + "!" # Python 2 syntax for IronPython 2.7
-greet("IronPython User")
-a = 1 + 2
-"""
-
-    invalid_code_syntax = """
-def my_function(
-    print "This has a syntax error"
-"""
-
-    invalid_code_indent = """
-def another_function():
-print "This has an indentation error" # Python 2 syntax, but indent error
-"""
-    print(try_ironpy_compile(invalid_code_syntax))
-    # print(check_syntax(invalid_code_syntax))
