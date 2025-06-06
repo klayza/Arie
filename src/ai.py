@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 model_config = {
     "moneyhog": {
-        "model": "google/gemini-2.5-pro-preview",
+        "model": "google/gemini-2.5-flash-preview-05-20",
         "client": OpenAI(base_url="https://openrouter.ai/api/v1"),
         "key": "OPENROUTER_API_KEY",
     },
@@ -22,7 +22,7 @@ model_config = {
 class AI:
     def __init__(self):
         self.system_prompt = self.get_system_prompt()
-        self.config = model_config["openai"]
+        self.config = model_config["moneyhog"]
         self.model = self.config["model"]
         self.client = self.config["client"]
         self.client.api_key = os.getenv(self.config["key"])

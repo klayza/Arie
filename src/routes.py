@@ -82,7 +82,7 @@ def generate_code(input=None):
 @routes.route("/", methods=["GET"])
 def home():
     # Load all ai events
-    ai_logs = logger.get_logs("ai")
+    ai_logs = logger.get_logs("ai")[::-1]
 
     # Load the working data as a list then convert to a dict keyed by timestamp
     working_path = os.path.join(
@@ -107,6 +107,11 @@ def home():
       <head>
         <title>AI Events</title>
         <style>
+            body {
+                font-family: Cambria;
+                max-width: 50%;
+                margin: auto;
+            }
           pre {
             background-color: #f4f4f4;
             padding: 10px;
@@ -118,6 +123,7 @@ def home():
         {% for event in ai_logs %}
           <div>
             <h3>Query: {{ event.data.query }}</h3>
+            <h3>Model: {{ event.data.model }}</h3>
             <h3>Event at {{ event.timestamp }}</h3>
             <pre><code>{{ event.data.code }}</code></pre>
             <label>
