@@ -11,7 +11,6 @@ from ai import AI
 from codecheck import clean_code
 
 load_dotenv()
-cheap_mode = os.getenv("CHEAP_MODE", "false").lower() == "true"
 routes = Blueprint("routes", __name__)
 
 
@@ -28,7 +27,7 @@ def generate_code(input=None):
         return jsonify({"error": "No input provided"}), 400
 
     # Bypass creating a new response if in cheap mode
-    if os.getenv("CHEAP_MODE", "false").lower() == "true":
+    if os.getenv("DEMO_MODE", "false").lower() == "true":
         return (
             jsonify(
                 {
