@@ -25,7 +25,8 @@ def log_event(log_type, data):
             with open(LOG_FILE, "r") as f:
                 logs = json.load(f)
         except json.JSONDecodeError:
-            logs = []
+            #TODO
+            return
     logs.append(log_entry)
     with open(LOG_FILE, "w") as f:
         json.dump(logs, f, indent=4)

@@ -565,5 +565,10 @@
             "code": "from pyrevit import revit, DB, UI\nfrom pyrevit import script\nfrom pyrevit import forms\nimport clr\nclr.AddReference('RevitAPI')\nclr.AddReference('RevitAPIUI')\n\ndoc = revit.doc\nuidoc = revit.uidoc\noutput = script.get_output()\n\nselection_ids = uidoc.Selection.GetElementIds()\n\nif not selection_ids or len(selection_ids) == 0:\n    forms.alert(\"No elements are currently selected.\", exitscript=True)\n\nfor element_id in selection_ids:\n    element = doc.GetElement(element_id)\n    if element is not None:\n        tag_no_param = element.LookupParameter(\"TAG NO.\")\n        if tag_no_param is not None:\n            tag_no_value = tag_no_param.AsString()\n            if tag_no_value:\n                output.print_md(\"Element ID: {} | Name: {} | TAG NO.: **{}**\".format(element.Id, element.Name, tag_no_value))\n            else:\n                output.print_md(\"Element ID: {} | Name: {} | TAG NO. parameter exists but is empty.\".format(element.Id, element.Name))\n        else:\n            output.print_md(\"Element ID: {} | Name: {} | No 'TAG NO.' parameter found.\".format(element.Id, element.Name))\n    else:\n        output.print_md(\"Could not retrieve element for ID: {}\".format(element_id))",
             "model": "google/gemini-2.5-flash-preview-05-20"
         }
-    }
-]
+    },
+    {
+        "timestamp": "2025-08-22T17:29:14.101823",
+        "log_type": "ai",
+        "data": {
+            "query": "hello",
+            "code": 

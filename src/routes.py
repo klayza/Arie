@@ -10,15 +10,14 @@ import logger
 from ai import AI
 from codecheck import clean_code
 
-load_dotenv()
+load_dotenv("../.env")
 routes = Blueprint("routes", __name__)
 
 
 @routes.route("/generate_code", methods=["POST", "GET"])
-def generate_code(input=None):
-    if input is not None:
-        user_input = input
-    elif request.method == "GET":
+def generate_code(user_input=None):
+
+    if request.method == "GET":
         user_input = request.args.get("input")
     else:
         user_input = request.json.get("input") if request.is_json else None
@@ -27,6 +26,7 @@ def generate_code(input=None):
         return jsonify({"error": "No input provided"}), 400
 
     # Bypass creating a new response if in cheap mode
+    print(os.getenv("DEMO_MODE"))
     if os.getenv("DEMO_MODE", "false").lower() == "true":
         return (
             jsonify(
@@ -50,7 +50,9 @@ def generate_code(input=None):
             return jsonify({"error": str(generated_code)}), 500
 
         # Attempt to clean the code
-        checked_code = clean_code(generated_code)
+        #TODO: add iron python 
+        # checked_code = clean_code(generated_code)
+        checked_code = generate_code
 
         logger.log_event(
             "ai",

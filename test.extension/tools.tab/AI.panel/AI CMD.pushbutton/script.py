@@ -15,6 +15,7 @@ def get_code(query):
     response = requests.get(
         "http://localhost:5000/generate_code?input=" + query.replace(" ", "%20")
     )
+    print(response)
     # When there is an error
     if response.status_code != 200:
         forms.alert(
@@ -31,7 +32,8 @@ def get_code(query):
 
 if query:
     ai_code = get_code(query)
-    exec(ai_code)
+    if ai_code: 
+        exec(ai_code)
 
 else:
     forms.alert("No text was entered.")
