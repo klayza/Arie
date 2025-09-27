@@ -1,13 +1,19 @@
-# pyRevit Script: Dimension All Walls in Current View (Overall Length)
+# -*- coding: utf-8 -*-
+# pyRevit Script: Dimension All Walls in Current View (Overall Length) and Highlight New Dimensions
 
 from pyrevit import revit, DB, UI, forms, script
 
+# --- EDITED: Added import for .NET List conversion ---
+from System.Collections.Generic import List
+
+
 # --- Configuration ---
 DEFAULT_OFFSET_MM = 1000  # Default offset for dimension line in millimeters
-MIN_WALL_LENGTH_MM = 50  # Minimum wall length in mm to attempt dimensioning
+MIN_WALL_LENGTH_MM = 50   # Minimum wall length in mm to attempt dimensioning
+
 
 # --- Helper Functions ---
-
+# (No changes to helper functions: get_offset_distance_from_user, get_wall_solid, find_wall_end_face_references)
 
 def get_offset_distance_from_user(prompt_message, default_value_mm):
     """Asks user for an offset distance in millimeters and converts to internal units (feet)."""
@@ -84,9 +90,6 @@ def find_wall_end_face_references(wall, wall_solid, wall_location_curve):
             if face_normal.IsAlmostEqualTo(
                 wall_direction
             ) or face_normal.IsAlmostEqualTo(-wall_direction):
-                # Heuristic: Area should be small relative to main faces (wall_height * wall_thickness)
-                # For simplicity, we'll rely on the normal and later sorting by projection.
-                # A more robust check would compare area to wall.Width * (approximate height).
                 candidate_faces.append(face.Reference)
 
     if not candidate_faces:
@@ -99,14 +102,11 @@ def find_wall_end_face_references(wall, wall_solid, wall_location_curve):
         try:
             geom_face = wall.GetGeometryObjectFromReference(ref)
             if isinstance(geom_face, DB.Face):
-                # Get a point on the face (e.g., center of its UV bounding box)
                 uv_center = (
                     geom_face.GetBoundingBox().Min + geom_face.GetBoundingBox().Max
                 ) / 2.0
                 point_on_face = geom_face.Evaluate(uv_center)
-
                 projection_result = wall_location_curve.Project(point_on_face)
-                # Use distance from start or parameter; parameter is good if curve is normalized
                 distance_from_start = projection_result.XYZPoint.DistanceTo(
                     wall_start_pt
                 )
@@ -145,7 +145,7 @@ def find_wall_end_face_references(wall, wall_solid, wall_location_curve):
 def dimension_walls_in_current_view():
     doc = revit.doc
     uidoc = revit.uidoc
-    if not uidoc:  # Should not happen in a regular pyRevit script
+    if not uidoc:
         forms.alert("No active UI document found.", title="Error")
         return
 
@@ -154,7 +154,6 @@ def dimension_walls_in_current_view():
         forms.alert("No active Revit view found.", title="Error")
         return
 
-    # Check if the view type is suitable for placing dimensions
     allowed_view_types = [
         DB.ViewType.FloorPlan,
         DB.ViewType.CeilingPlan,
@@ -164,19 +163,17 @@ def dimension_walls_in_current_view():
     ]
     if active_view.ViewType not in allowed_view_types:
         forms.alert(
-            "Dimensions can typically be placed in Plan, Ceiling Plan, Elevation, Section, or Detail views.",
+            "This script works best in Plan, Elevation, or Section views.",
             title="View Not Suitable",
         )
         return
 
-    # Get offset distance from user
     offset_internal_units = get_offset_distance_from_user(
         "Enter offset for dimension line (in millimeters):", DEFAULT_OFFSET_MM
     )
-    if offset_internal_units is None:  # User cancelled or invalid input
+    if offset_internal_units is None:
         script.exit()
 
-    # Collect walls visible in the current view
     walls_to_dimension = (
         DB.FilteredElementCollector(doc, active_view.Id)
         .OfCategory(DB.BuiltInCategory.OST_Walls)
@@ -188,6 +185,8 @@ def dimension_walls_in_current_view():
         forms.alert("No walls found in the current view.", title="No Walls Found")
         return
 
+    # --- EDITED: Initialize lists to store results ---
+    created_dimension_ids = []  # Store IDs of new dimensions for selection
     created_dimensions_count = 0
     failed_walls_count = 0
     min_wall_length_internal = DB.UnitUtils.ConvertToInternalUnits(
@@ -203,82 +202,39 @@ def dimension_walls_in_current_view():
                     failed_walls_count += 1
                     continue
 
-                # This script primarily targets straight walls for overall length dimensions
                 if not isinstance(location_curve, DB.Line):
-                    print(
-                        "Skipping non-linear wall (ID: {}). Only straight walls are currently supported for overall length.".format(
-                            wall.Id
-                        )
-                    )
                     failed_walls_count += 1
                     continue
 
                 if location_curve.Length < min_wall_length_internal:
-                    print(
-                        "Skipping very short wall (ID: {}). Length: {:.2f}mm".format(
-                            wall.Id,
-                            DB.UnitUtils.ConvertFromInternalUnits(
-                                location_curve.Length, DB.UnitTypeId.Millimeters
-                            ),
-                        )
-                    )
                     failed_walls_count += 1
                     continue
 
                 p1 = location_curve.GetEndPoint(0)
                 p2 = location_curve.GetEndPoint(1)
-                wall_direction_3d = (p2 - p1).Normalize()  # 3D direction of the wall
-
-                # Determine offset vector in the view plane, perpendicular to the wall's projection
+                wall_direction_3d = (p2 - p1).Normalize()
                 view_normal = active_view.ViewDirection
-
-                # Project wall direction onto view plane (direction of dimension string in view)
                 wall_dir_in_view = (
                     wall_direction_3d
                     - wall_direction_3d.DotProduct(view_normal) * view_normal
                 )
-                if wall_dir_in_view.IsAlmostEqualTo(
-                    DB.XYZ.Zero
-                ):  # Wall is perpendicular to view plane
-                    print(
-                        "Skipping wall (ID: {}) as it's perpendicular to the view plane.".format(
-                            wall.Id
-                        )
-                    )
+
+                if wall_dir_in_view.IsAlmostEqualTo(DB.XYZ.Zero):
                     failed_walls_count += 1
                     continue
                 wall_dir_in_view = wall_dir_in_view.Normalize()
 
-                # Offset vector is perpendicular to both wall_dir_in_view and view_normal
                 offset_vector_in_view = wall_dir_in_view.CrossProduct(
                     view_normal
                 ).Normalize()
-                if offset_vector_in_view.IsAlmostEqualTo(
-                    DB.XYZ.Zero
-                ):  # Should only happen if wall_dir_in_view was zero
-                    # Fallback (e.g. if wall parallel to view direction in an odd way)
-                    offset_vector_in_view = (
-                        active_view.UpDirection
-                        if abs(wall_dir_in_view.DotProduct(active_view.RightDirection))
-                        < 0.5
-                        else active_view.RightDirection
-                    )
-                    offset_vector_in_view = (
-                        offset_vector_in_view
-                        - offset_vector_in_view.DotProduct(view_normal) * view_normal
-                    )  # re-project to view plane
-                    offset_vector_in_view = offset_vector_in_view.Normalize()
-
-                # Create the dimension line geometry (parallel to the wall's 3D location line)
-                # The offset is applied in the calculated view plane direction
+                
                 dim_line_p1 = p1 + offset_vector_in_view * offset_internal_units
                 dim_line_p2 = p2 + offset_vector_in_view * offset_internal_units
                 dimension_placement_line = DB.Line.CreateBound(dim_line_p1, dim_line_p2)
 
-                # Get references for dimensioning (overall wall length using end faces)
                 references_array = DB.ReferenceArray()
                 wall_solid = get_wall_solid(wall, active_view)
-
+                
                 if wall_solid:
                     end_face_refs = find_wall_end_face_references(
                         wall, wall_solid, location_curve
@@ -286,17 +242,8 @@ def dimension_walls_in_current_view():
                     if len(end_face_refs) == 2:
                         references_array.Append(end_face_refs[0])
                         references_array.Append(end_face_refs[1])
-                    else:
-                        print(
-                            "Wall ID {}: Found {} end face refs, expected 2. Skipping.".format(
-                                wall.Id, len(end_face_refs)
-                            )
-                        )
-                else:
-                    print("Wall ID {}: No valid solid found. Skipping.".format(wall.Id))
 
                 if references_array.Size == 2:
-                    # Ensure references are not identical (can happen with complex geometry)
                     ref1_stable = references_array.get_Item(
                         0
                     ).ConvertToStableRepresentation(doc)
@@ -305,18 +252,17 @@ def dimension_walls_in_current_view():
                     ).ConvertToStableRepresentation(doc)
 
                     if ref1_stable != ref2_stable:
-                        doc.Create.NewDimension(
+                        # --- EDITED: Capture the newly created dimension ---
+                        new_dimension = doc.Create.NewDimension(
                             active_view, dimension_placement_line, references_array
                         )
-                        created_dimensions_count += 1
+                        # If creation was successful, add its ID to our list
+                        if new_dimension:
+                            created_dimension_ids.append(new_dimension.Id)
+                            created_dimensions_count += 1
                     else:
-                        print(
-                            "Skipping dimension for wall {} due to identical end references.".format(
-                                wall.Id
-                            )
-                        )
                         failed_walls_count += 1
-                elif wall_solid:  # Only count as fail if we processed a solid
+                elif wall_solid:
                     failed_walls_count += 1
 
             except Exception as ex:
@@ -325,12 +271,21 @@ def dimension_walls_in_current_view():
 
         if created_dimensions_count > 0:
             t.Commit()
+            
+            # --- EDITED: Highlight the new dimensions after committing ---
+            if created_dimension_ids:
+                # The API requires a .NET List, not a Python list
+                net_element_ids = List[DB.ElementId](created_dimension_ids)
+                uidoc.Selection.SetElementIds(net_element_ids)
+                uidoc.RefreshActiveView() # Ensures the selection highlight is visible
+
             forms.alert(
-                "Successfully created {} overall dimension(s).\n"
+                "Successfully created and selected {} overall dimension(s).\n"
                 "{} wall(s) could not be dimensioned or were skipped.".format(
                     created_dimensions_count, failed_walls_count
                 ),
                 title="Dimensioning Complete",
+                warn_icon=False,
             )
         else:
             t.RollBack()
@@ -345,7 +300,6 @@ def dimension_walls_in_current_view():
 
 # --- Script Execution ---
 if __name__ == "__main__":
-    # Ensure the script is run within Revit and a document is active
     if revit.doc:
         dimension_walls_in_current_view()
     else:
