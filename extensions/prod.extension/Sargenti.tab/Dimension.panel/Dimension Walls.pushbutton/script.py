@@ -120,11 +120,11 @@ def find_wall_end_face_references(wall, wall_solid, wall_location_curve):
                     }
                 )
         except Exception as ex_proj:
-            print(
-                "Error processing reference for sorting (Wall ID {}): {}".format(
-                    wall.Id, ex_proj
-                )
-            )
+            # print(
+            #     "Error processing reference for sorting (Wall ID {}): {}".format(
+            #         wall.Id, ex_proj
+            #     )
+            # )
             continue
 
     # Ensure uniqueness and sort
@@ -267,7 +267,7 @@ def dimension_walls_in_current_view():
 
             except Exception as ex:
                 failed_walls_count += 1
-                print("Error dimensioning wall (ID: {}): {}".format(wall.Id, ex))
+                # print("Error dimensioning wall (ID: {}): {}".format(wall.Id, ex))
 
         if created_dimensions_count > 0:
             t.Commit()
