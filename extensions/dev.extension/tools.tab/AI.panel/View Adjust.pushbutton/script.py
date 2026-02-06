@@ -13,6 +13,7 @@ from pyrevit import revit, DB, forms, script
 doc = revit.doc
 uidoc = revit.uidoc
 output = script.get_output()
+_debug_records = []
 
 
 def _is_elev_or_section(v):
@@ -154,7 +155,7 @@ def _find_nearest_floor_and_ceiling_z(view, pad_ft=0.10):
     # Works in the view's crop-box local coordinate system.
     cb = view.CropBox
     if cb is None:
-        return None
+        return None, None, {"error": "View has no crop box."}
 
     # Make sure crop box is active so changes stick.
     try:
@@ -173,6 +174,17 @@ def _find_nearest_floor_and_ceiling_z(view, pad_ft=0.10):
     ceilings = DB.FilteredElementCollector(doc).OfCategory(DB.BuiltInCategory.OST_Ceilings)\
         .WhereElementIsNotElementType().ToElements()
 
+    debug_info = {
+        "crop_min_z": crop_min.Z,
+        "crop_max_z": crop_max.Z,
+        "floor_candidates": [],
+        "ceiling_candidates": [],
+        "floor_source": None,
+        "ceiling_source": None,
+        "notes": [],
+        "padding_ft": pad_ft,
+    }
+
     best_floor_z = None   # highest below
     best_ceil_z = None    # lowest above
 
@@ -186,8 +198,13 @@ def _find_nearest_floor_and_ceiling_z(view, pad_ft=0.10):
             continue
         vmin, vmax = vbb
 
-        # require overlap with crop region in X/Y to avoid grabbing unrelated floors
-        if not _overlaps_2d(vmin, vmax, crop_min, crop_max):
+        overlaps = _overlaps_2d(vmin, vmax, crop_min, crop_max)
+        debug_info["floor_candidates"].append({
+            "element_id": f.Id.IntegerValue,
+            "top_z": vmax.Z,
+            "overlaps_crop": overlaps,
+        })
+        if not overlaps:
             continue
 
         # floor "top" in view-local Z is vmax.Z
@@ -195,6 +212,7 @@ def _find_nearest_floor_and_ceiling_z(view, pad_ft=0.10):
         if f_top <= z0 + 1e-6:
             if best_floor_z is None or f_top > best_floor_z:
                 best_floor_z = f_top
+                debug_info["floor_source"] = "floor-element"
 
     # scan ceilings
     for c in ceilings:
@@ -206,7 +224,13 @@ def _find_nearest_floor_and_ceiling_z(view, pad_ft=0.10):
             continue
         vmin, vmax = vbb
 
-        if not _overlaps_2d(vmin, vmax, crop_min, crop_max):
+        overlaps = _overlaps_2d(vmin, vmax, crop_min, crop_max)
+        debug_info["ceiling_candidates"].append({
+            "element_id": c.Id.IntegerValue,
+            "bottom_z": vmin.Z,
+            "overlaps_crop": overlaps,
+        })
+        if not overlaps:
             continue
 
         # ceiling "bottom" in view-local Z is vmin.Z
@@ -214,46 +238,71 @@ def _find_nearest_floor_and_ceiling_z(view, pad_ft=0.10):
         if c_bot >= z0 - 1e-6:
             if best_ceil_z is None or c_bot < best_ceil_z:
                 best_ceil_z = c_bot
+                debug_info["ceiling_source"] = "ceiling-element"
 
     # fallback to levels if nothing found
     if best_floor_z is None or best_ceil_z is None:
         fb_floor, fb_ceil = _nearest_levels_fallback(view, z0)
-        if best_floor_z is None:
+        if fb_floor is not None and best_floor_z is None:
             best_floor_z = fb_floor
-        if best_ceil_z is None:
+            debug_info["floor_source"] = "level-fallback"
+        if fb_ceil is not None and best_ceil_z is None:
             best_ceil_z = fb_ceil
+            debug_info["ceiling_source"] = "level-fallback"
 
     if best_floor_z is None and best_ceil_z is None:
-        return None
+        debug_info["notes"].append("No floor, ceiling, or level bounds detected.")
+        return None, None, debug_info
 
     # apply padding if we found values
     if best_floor_z is not None:
         best_floor_z = best_floor_z - pad_ft
+        debug_info["notes"].append("Applied floor padding of {:.3f} ft.".format(pad_ft))
     if best_ceil_z is not None:
         best_ceil_z = best_ceil_z + pad_ft
+        debug_info["notes"].append("Applied ceiling padding of {:.3f} ft.".format(pad_ft))
 
-    return best_floor_z, best_ceil_z
+    return best_floor_z, best_ceil_z, debug_info
 
 
 def _apply_template_and_crop(view, template_view, pad_ft=0.10):
     # Apply template
+    record = {
+        "view_name": view.Name,
+        "view_id": view.Id.IntegerValue,
+        "template_name": template_view.Name if template_view else None,
+        "initial_crop_min_z": None,
+        "initial_crop_max_z": None,
+        "new_crop_min_z": None,
+        "new_crop_max_z": None,
+        "find_debug": None,
+        "messages": [],
+    }
+    _debug_records.append(record)
     try:
         view.ViewTemplateId = template_view.Id
+        record["messages"].append("Applied template '{}'.".format(template_view.Name))
     except Exception as e:
         output.print_md("Template apply failed for view '{}': {}".format(view.Name, e))
+        record["messages"].append("Template apply failed: {}".format(e))
 
     # Crop height to nearest floor/ceiling
     cb = view.CropBox
     if cb is None:
         output.print_md("View '{}' has no CropBox; skipping crop adjustment.".format(view.Name))
+        record["messages"].append("No crop box found; skipped crop adjustment.")
         return
 
-    res = _find_nearest_floor_and_ceiling_z(view, pad_ft=pad_ft)
-    if not res:
+    record["initial_crop_min_z"] = cb.Min.Z
+    record["initial_crop_max_z"] = cb.Max.Z
+
+    floor_z, ceil_z, find_debug = _find_nearest_floor_and_ceiling_z(view, pad_ft=pad_ft)
+    record["find_debug"] = find_debug
+    if floor_z is None and ceil_z is None:
         output.print_md("No floor/ceiling/level bounds found for view '{}'; leaving crop unchanged.".format(view.Name))
+        record["messages"].append("No usable bounds detected; crop left unchanged.")
         return
 
-    floor_z, ceil_z = res
     # If only one bound was found, keep the other side as-is.
     new_min_z = cb.Min.Z if floor_z is None else floor_z
     new_max_z = cb.Max.Z if ceil_z is None else ceil_z
@@ -261,6 +310,7 @@ def _apply_template_and_crop(view, template_view, pad_ft=0.10):
     # sanity: don't invert
     if new_max_z <= new_min_z:
         output.print_md("Crop bounds invalid for view '{}'; leaving crop unchanged.".format(view.Name))
+        record["messages"].append("Computed crop bounds invalid (max <= min); skipped update.")
         return
 
     new_cb = DB.BoundingBoxXYZ()
@@ -274,11 +324,70 @@ def _apply_template_and_crop(view, template_view, pad_ft=0.10):
         pass
     try:
         view.CropBox = new_cb
+        record["new_crop_min_z"] = new_min_z
+        record["new_crop_max_z"] = new_max_z
+        record["messages"].append("Crop updated successfully.")
     except Exception as e:
         output.print_md("Failed to set CropBox for view '{}': {}".format(view.Name, e))
+        record["messages"].append("Failed to set crop box: {}".format(e))
+
+
+def _print_debug_report(records):
+    if not records:
+        output.print_md("No debug data recorded.")
+        return
+
+    output.print_md("### Debug Report")
+    for rec in records:
+        output.print_md("**View:** {} (ID {})".format(rec["view_name"], rec["view_id"]))
+        output.print_md("* Template: {}".format(rec["template_name"] or "none"))
+        if rec["initial_crop_min_z"] is not None and rec["initial_crop_max_z"] is not None:
+            output.print_md("* Crop Z before: min {:.3f} ft, max {:.3f} ft".format(
+                rec["initial_crop_min_z"], rec["initial_crop_max_z"]))
+        else:
+            output.print_md("* Crop Z before: unknown")
+
+        if rec["new_crop_min_z"] is not None or rec["new_crop_max_z"] is not None:
+            output.print_md("* Crop Z after: min {} ft, max {} ft".format(
+                "{:.3f}".format(rec["new_crop_min_z"]) if rec["new_crop_min_z"] is not None else "unchanged",
+                "{:.3f}".format(rec["new_crop_max_z"]) if rec["new_crop_max_z"] is not None else "unchanged"))
+        else:
+            output.print_md("* Crop Z after: unchanged")
+
+        find_debug = rec.get("find_debug") or {}
+        if find_debug.get("error"):
+            output.print_md("* Detection error: {}".format(find_debug["error"]))
+        else:
+            output.print_md("* Floor source: {}".format(find_debug.get("floor_source") or "none"))
+            output.print_md("* Ceiling source: {}".format(find_debug.get("ceiling_source") or "none"))
+
+            floor_cands = find_debug.get("floor_candidates") or []
+            if floor_cands:
+                output.print_md("    - Floor candidates: {}".format(
+                    ", ".join("#{} top {:.3f} ({})".format(
+                        c["element_id"], c.get("top_z", 0.0),
+                        "overlap" if c.get("overlaps_crop") else "no overlap") for c in floor_cands)))
+
+            ceil_cands = find_debug.get("ceiling_candidates") or []
+            if ceil_cands:
+                output.print_md("    - Ceiling candidates: {}".format(
+                    ", ".join("#{} bottom {:.3f} ({})".format(
+                        c["element_id"], c.get("bottom_z", 0.0),
+                        "overlap" if c.get("overlaps_crop") else "no overlap") for c in ceil_cands)))
+
+            if find_debug.get("notes"):
+                for note in find_debug.get("notes"):
+                    output.print_md("    - Note: {}".format(note))
+
+        if rec["messages"]:
+            for msg in rec["messages"]:
+                output.print_md("    - Message: {}".format(msg))
+
+        output.print_md("\n")
 
 
 def main():
+    _debug_records[:] = []
     views = _get_selected_views_or_active()
     if not views:
         forms.alert("Select one or more Elevation/Section views (or activate one) and run again.", exitscript=True)
@@ -293,6 +402,7 @@ def main():
             _apply_template_and_crop(v, template, pad_ft=pad_ft)
 
     forms.alert("Done. Updated {} view(s).".format(len(views)), title="pyRevit")
+    _print_debug_report(_debug_records)
 
 
 if __name__ == "__main__":

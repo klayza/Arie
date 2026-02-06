@@ -22,6 +22,213 @@ uidoc = revit.uidoc
 # Get the pyRevit output window
 output = script.get_output()
 
+# --- Helpers ---
+def _transform_bbox_to_view_local(bb_model, inv_t):
+    pts = []
+    try:
+        mn = bb_model.Min
+        mx = bb_model.Max
+        corners = [
+            DB.XYZ(mn.X, mn.Y, mn.Z),
+            DB.XYZ(mn.X, mn.Y, mx.Z),
+            DB.XYZ(mn.X, mx.Y, mn.Z),
+            DB.XYZ(mn.X, mx.Y, mx.Z),
+            DB.XYZ(mx.X, mn.Y, mn.Z),
+            DB.XYZ(mx.X, mn.Y, mx.Z),
+            DB.XYZ(mx.X, mx.Y, mn.Z),
+            DB.XYZ(mx.X, mx.Y, mx.Z),
+        ]
+        for p in corners:
+            pts.append(inv_t.OfPoint(p))
+    except Exception:
+        return None
+
+    vmin = DB.XYZ(min(p.X for p in pts), min(p.Y for p in pts), min(p.Z for p in pts))
+    vmax = DB.XYZ(max(p.X for p in pts), max(p.Y for p in pts), max(p.Z for p in pts))
+    return vmin, vmax
+
+# --- Temp Logic: expand active elevation crop ---
+def expand_active_elevation_crop_by_100ft():
+    view = doc.ActiveView
+    if not isinstance(view, DB.View):
+        forms.alert("No active view found.", exitscript=True)
+        return
+
+    if view.ViewType not in (DB.ViewType.Elevation, DB.ViewType.Section, DB.ViewType.Detail):
+        forms.alert("Active view is not an elevation/section/detail view.", exitscript=True)
+        return
+
+    cb = view.CropBox
+    if cb is None:
+        forms.alert("Active view has no crop box.", exitscript=True)
+        return
+
+    try:
+        view.CropBoxActive = True
+    except Exception:
+        pass
+
+    # Expand width/height by 100' total (50' each side) in view-local X/Y
+    expand = 50.0
+    new_cb = DB.BoundingBoxXYZ()
+    new_cb.Transform = cb.Transform
+    new_cb.Min = DB.XYZ(cb.Min.X - expand, cb.Min.Y - expand, cb.Min.Z)
+    new_cb.Max = DB.XYZ(cb.Max.X + expand, cb.Max.Y + expand, cb.Max.Z)
+
+    with revit.Transaction("Temp expand elevation crop by 100ft"):
+        view.CropBox = new_cb
+
+    output.print_md("Expanded crop for view '{}' by 100' width/height.".format(view.Name))
+    list_floors_and_ceilings_in_active_view()
+
+
+def list_floors_and_ceilings_in_active_view():
+    view = doc.ActiveView
+    if not isinstance(view, DB.View):
+        forms.alert("No active view found.", exitscript=True)
+        return
+
+    floors = DB.FilteredElementCollector(doc, view.Id)\
+        .OfCategory(DB.BuiltInCategory.OST_Floors)\
+        .WhereElementIsNotElementType()\
+        .ToElements()
+
+    ceilings = DB.FilteredElementCollector(doc, view.Id)\
+        .OfCategory(DB.BuiltInCategory.OST_Ceilings)\
+        .WhereElementIsNotElementType()\
+        .ToElements()
+
+    inv_t = view.CropBox.Transform.Inverse if view.CropBox else None
+
+    output.print_md("### Floors/Ceilings in Active View: {}".format(view.Name))
+    output.print_md("* Floors: {}".format(len(floors)))
+    output.print_md("* Ceilings: {}".format(len(ceilings)))
+
+    if floors:
+        output.print_md("#### Floors")
+        for f in floors:
+            z_info = ""
+            if inv_t:
+                bb = f.get_BoundingBox(None)
+                vbb = _transform_bbox_to_view_local(bb, inv_t) if bb else None
+                if vbb:
+                    vmin, vmax = vbb
+                    z_info = " | Z min {:.3f}, max {:.3f}".format(vmin.Z, vmax.Z)
+            output.print_md("- {} (ID {}){}".format(f.Name, f.Id.IntegerValue, z_info))
+
+    if ceilings:
+        output.print_md("#### Ceilings")
+        for c in ceilings:
+            z_info = ""
+            if inv_t:
+                bb = c.get_BoundingBox(None)
+                vbb = _transform_bbox_to_view_local(bb, inv_t) if bb else None
+                if vbb:
+                    vmin, vmax = vbb
+                    z_info = " | Z min {:.3f}, max {:.3f}".format(vmin.Z, vmax.Z)
+            output.print_md("- {} (ID {}){}".format(c.Name, c.Id.IntegerValue, z_info))
+
+
+def auto_fit_active_view_to_floor_and_ceiling(pad_ft=0.10):
+    view = doc.ActiveView
+    if not isinstance(view, DB.View):
+        forms.alert("No active view found.", exitscript=True)
+        return
+
+    if view.ViewType not in (DB.ViewType.Elevation, DB.ViewType.Section, DB.ViewType.Detail):
+        forms.alert("Active view is not an elevation/section/detail view.", exitscript=True)
+        return
+
+    cb = view.CropBox
+    if cb is None:
+        forms.alert("Active view has no crop box.", exitscript=True)
+        return
+
+    try:
+        view.CropBoxActive = True
+    except Exception:
+        pass
+
+    inv_t = cb.Transform.Inverse
+    crop_min = cb.Min
+    crop_max = cb.Max
+
+    floors = DB.FilteredElementCollector(doc, view.Id)\
+        .OfCategory(DB.BuiltInCategory.OST_Floors)\
+        .WhereElementIsNotElementType()\
+        .ToElements()
+
+    ceilings = DB.FilteredElementCollector(doc, view.Id)\
+        .OfCategory(DB.BuiltInCategory.OST_Ceilings)\
+        .WhereElementIsNotElementType()\
+        .ToElements()
+
+    # For elevation/section views, view-local Y is the vertical axis.
+    floor_tops = []
+    ceil_bottoms = []
+
+    for f in floors:
+        bb = f.get_BoundingBox(None)
+        vbb = _transform_bbox_to_view_local(bb, inv_t) if bb else None
+        if not vbb:
+            continue
+        vmin, vmax = vbb
+        floor_tops.append(vmax.Y)
+
+    for c in ceilings:
+        bb = c.get_BoundingBox(None)
+        vbb = _transform_bbox_to_view_local(bb, inv_t) if bb else None
+        if not vbb:
+            continue
+        vmin, vmax = vbb
+        ceil_bottoms.append(vmin.Y)
+
+    if not floor_tops and not ceil_bottoms:
+        forms.alert("No floor or ceiling bounds found in this view.", exitscript=True)
+        return
+
+    # Prefer floor below current crop max and ceiling above current crop min.
+    floor_candidates = [y for y in floor_tops if y <= crop_max.Y + 1e-6]
+    ceil_candidates = [y for y in ceil_bottoms if y >= crop_min.Y - 1e-6]
+
+    best_floor_y = max(floor_candidates) if floor_candidates else (max(floor_tops) if floor_tops else None)
+    best_ceil_y = min(ceil_candidates) if ceil_candidates else (min(ceil_bottoms) if ceil_bottoms else None)
+
+    # If bounds cross, try midpoint-based filtering as a fallback.
+    if best_floor_y is not None and best_ceil_y is not None and best_floor_y >= best_ceil_y:
+        y0 = (crop_min.Y + crop_max.Y) / 2.0
+        floor_candidates = [y for y in floor_tops if y <= y0 + 1e-6]
+        ceil_candidates = [y for y in ceil_bottoms if y >= y0 - 1e-6]
+        best_floor_y = max(floor_candidates) if floor_candidates else best_floor_y
+        best_ceil_y = min(ceil_candidates) if ceil_candidates else best_ceil_y
+
+    if best_floor_y is not None:
+        best_floor_y -= pad_ft
+    if best_ceil_y is not None:
+        best_ceil_y += pad_ft
+
+    new_min_y = cb.Min.Y if best_floor_y is None else best_floor_y
+    new_max_y = cb.Max.Y if best_ceil_y is None else best_ceil_y
+
+    if new_max_y <= new_min_y:
+        output.print_md("Computed crop invalid: min {:.3f}, max {:.3f}".format(new_min_y, new_max_y))
+        output.print_md("Crop Y before: min {:.3f}, max {:.3f}".format(crop_min.Y, crop_max.Y))
+        output.print_md("Floor tops (Y): {}".format(", ".join("{:.3f}".format(y) for y in floor_tops)))
+        output.print_md("Ceiling bottoms (Y): {}".format(", ".join("{:.3f}".format(y) for y in ceil_bottoms)))
+        forms.alert("Computed crop bounds invalid; no changes applied.", exitscript=True)
+        return
+
+    new_cb = DB.BoundingBoxXYZ()
+    new_cb.Transform = cb.Transform
+    new_cb.Min = DB.XYZ(cb.Min.X, new_min_y, cb.Min.Z)
+    new_cb.Max = DB.XYZ(cb.Max.X, new_max_y, cb.Max.Z)
+
+    with revit.Transaction("Auto-fit elevation to floor/ceiling (temp)"):
+        view.CropBox = new_cb
+
+    output.print_md("Auto-fit crop for view '{}': Y min {:.3f}, Y max {:.3f}.".format(
+        view.Name, new_min_y, new_max_y))
+
 # --- Main Logic ---
 def find_and_display_elements():
     """
@@ -106,4 +313,4 @@ def find_and_display_elements():
 
 # --- Script Execution ---
 if __name__ == "__main__":
-    find_and_display_elements()
+    auto_fit_active_view_to_floor_and_ceiling()
