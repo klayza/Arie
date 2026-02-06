@@ -153,19 +153,23 @@ def auto_fit_active_view_to_floor_and_ceiling(pad_ft=0.10):
     crop_min = cb.Min
     crop_max = cb.Max
 
-    floors = DB.FilteredElementCollector(doc, view.Id)\
+    # Collect from the full model, then filter by view-local X/Z so crop height doesn't matter.
+    floors = DB.FilteredElementCollector(doc)\
         .OfCategory(DB.BuiltInCategory.OST_Floors)\
         .WhereElementIsNotElementType()\
         .ToElements()
 
-    ceilings = DB.FilteredElementCollector(doc, view.Id)\
+    ceilings = DB.FilteredElementCollector(doc)\
         .OfCategory(DB.BuiltInCategory.OST_Ceilings)\
         .WhereElementIsNotElementType()\
         .ToElements()
 
     # For elevation/section views, view-local Y is the vertical axis.
-    floor_tops = []
-    ceil_bottoms = []
+    max_thickness_ft = 5.0
+    center_x = (crop_min.X + crop_max.X) / 2.0
+    center_z = (crop_min.Z + crop_max.Z) / 2.0
+    all_floor_cands = []
+    all_ceil_cands = []
 
     for f in floors:
         bb = f.get_BoundingBox(None)
@@ -173,7 +177,21 @@ def auto_fit_active_view_to_floor_and_ceiling(pad_ft=0.10):
         if not vbb:
             continue
         vmin, vmax = vbb
-        floor_tops.append(vmax.Y)
+        if vmax.X < crop_min.X or vmin.X > crop_max.X:
+            continue
+        if vmax.Z < crop_min.Z or vmin.Z > crop_max.Z:
+            continue
+        thickness = abs(vmax.Y - vmin.Y)
+        cx = (vmin.X + vmax.X) / 2.0
+        cz = (vmin.Z + vmax.Z) / 2.0
+        dist = ((cx - center_x) ** 2 + (cz - center_z) ** 2) ** 0.5
+        all_floor_cands.append({
+            "top_y": vmax.Y,
+            "dist": dist,
+            "thickness": thickness,
+            "id": f.Id.IntegerValue,
+            "name": f.Name,
+        })
 
     for c in ceilings:
         bb = c.get_BoundingBox(None)
@@ -181,26 +199,54 @@ def auto_fit_active_view_to_floor_and_ceiling(pad_ft=0.10):
         if not vbb:
             continue
         vmin, vmax = vbb
-        ceil_bottoms.append(vmin.Y)
+        if vmax.X < crop_min.X or vmin.X > crop_max.X:
+            continue
+        if vmax.Z < crop_min.Z or vmin.Z > crop_max.Z:
+            continue
+        thickness = abs(vmax.Y - vmin.Y)
+        cx = (vmin.X + vmax.X) / 2.0
+        cz = (vmin.Z + vmax.Z) / 2.0
+        dist = ((cx - center_x) ** 2 + (cz - center_z) ** 2) ** 0.5
+        all_ceil_cands.append({
+            "bot_y": vmin.Y,
+            "dist": dist,
+            "thickness": thickness,
+            "id": c.Id.IntegerValue,
+            "name": c.Name,
+        })
 
-    if not floor_tops and not ceil_bottoms:
+    floor_cands = [c for c in all_floor_cands if c["thickness"] <= max_thickness_ft]
+    ceil_cands = [c for c in all_ceil_cands if c["thickness"] <= max_thickness_ft]
+    if not floor_cands:
+        floor_cands = all_floor_cands
+    if not ceil_cands:
+        ceil_cands = all_ceil_cands
+
+    if not floor_cands and not ceil_cands:
         forms.alert("No floor or ceiling bounds found in this view.", exitscript=True)
         return
 
-    # Prefer floor below current crop max and ceiling above current crop min.
-    floor_candidates = [y for y in floor_tops if y <= crop_max.Y + 1e-6]
-    ceil_candidates = [y for y in ceil_bottoms if y >= crop_min.Y - 1e-6]
+    # Pick floor closest to view center (then highest if tie).
+    best_floor = None
+    if floor_cands:
+        floor_cands.sort(key=lambda x: (x["dist"], -x["top_y"]))
+        best_floor = floor_cands[0]
 
-    best_floor_y = max(floor_candidates) if floor_candidates else (max(floor_tops) if floor_tops else None)
-    best_ceil_y = min(ceil_candidates) if ceil_candidates else (min(ceil_bottoms) if ceil_bottoms else None)
+    # Pick ceiling closest to view center (then lowest if tie).
+    best_ceil = None
+    if ceil_cands:
+        ceil_cands.sort(key=lambda x: (x["dist"], x["bot_y"]))
+        best_ceil = ceil_cands[0]
 
-    # If bounds cross, try midpoint-based filtering as a fallback.
-    if best_floor_y is not None and best_ceil_y is not None and best_floor_y >= best_ceil_y:
-        y0 = (crop_min.Y + crop_max.Y) / 2.0
-        floor_candidates = [y for y in floor_tops if y <= y0 + 1e-6]
-        ceil_candidates = [y for y in ceil_bottoms if y >= y0 - 1e-6]
-        best_floor_y = max(floor_candidates) if floor_candidates else best_floor_y
-        best_ceil_y = min(ceil_candidates) if ceil_candidates else best_ceil_y
+    # If we have a floor, prefer a ceiling above it.
+    if best_floor and ceil_cands:
+        above = [c for c in ceil_cands if c["bot_y"] > best_floor["top_y"] + 1e-6]
+        if above:
+            above.sort(key=lambda x: (x["dist"], x["bot_y"]))
+            best_ceil = above[0]
+
+    best_floor_y = best_floor["top_y"] if best_floor else None
+    best_ceil_y = best_ceil["bot_y"] if best_ceil else None
 
     if best_floor_y is not None:
         best_floor_y -= pad_ft
@@ -213,8 +259,10 @@ def auto_fit_active_view_to_floor_and_ceiling(pad_ft=0.10):
     if new_max_y <= new_min_y:
         output.print_md("Computed crop invalid: min {:.3f}, max {:.3f}".format(new_min_y, new_max_y))
         output.print_md("Crop Y before: min {:.3f}, max {:.3f}".format(crop_min.Y, crop_max.Y))
-        output.print_md("Floor tops (Y): {}".format(", ".join("{:.3f}".format(y) for y in floor_tops)))
-        output.print_md("Ceiling bottoms (Y): {}".format(", ".join("{:.3f}".format(y) for y in ceil_bottoms)))
+        output.print_md("Floor candidates: {}".format(", ".join(
+            "#{} {:.3f}".format(c["id"], c["top_y"]) for c in floor_cands)))
+        output.print_md("Ceiling candidates: {}".format(", ".join(
+            "#{} {:.3f}".format(c["id"], c["bot_y"]) for c in ceil_cands)))
         forms.alert("Computed crop bounds invalid; no changes applied.", exitscript=True)
         return
 
@@ -226,6 +274,10 @@ def auto_fit_active_view_to_floor_and_ceiling(pad_ft=0.10):
     with revit.Transaction("Auto-fit elevation to floor/ceiling (temp)"):
         view.CropBox = new_cb
 
+    if best_floor:
+        output.print_md("Selected floor: {} (ID {})".format(best_floor["name"], best_floor["id"]))
+    if best_ceil:
+        output.print_md("Selected ceiling: {} (ID {})".format(best_ceil["name"], best_ceil["id"]))
     output.print_md("Auto-fit crop for view '{}': Y min {:.3f}, Y max {:.3f}.".format(
         view.Name, new_min_y, new_max_y))
 
