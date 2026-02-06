@@ -1,0 +1,26 @@
+Revit scan
+==============================
+
+Year 2022
+----------------------------------------
+2022: year directory not found -> T:\architecture archives\Target\03 Projects\2022
+
+Year 2023
+----------------------------------------
+2023: year directory not found -> T:\architecture archives\Target\03 Projects\2023
+
+Year 2024
+----------------------------------------
+2024: year directory not found -> T:\architecture archives\Target\03 Projects\2024
+
+Year 2025
+----------------------------------------
+2025: year directory not found -> T:\architecture archives\Target\03 Projects\2025
+
+Totals
+------
+Years scanned: 0
+Year directories missing: 4
+Projects checked: 0
+Projects with .rvt files: 0
+Total .rvt files found (01_REVIT only): 0
